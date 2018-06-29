@@ -1,10 +1,20 @@
 import React, { Component } from 'react'
-import { View, Text,Image, StyleSheet,TouchableOpacity,AsyncStorage,Platform} from 'react-native'
+import { View, Text,Image,AsyncStorage,StatusBar} from 'react-native'
 import SQLite from 'react-native-sqlite-storage'
 import images from './images'
 import { StackActions, NavigationActions } from 'react-navigation';
 import {styles} from './styles'
+import AppDB from './AppDB'
+
+var appDB = new AppDB("my.db","location")
+
 export default class Start extends Component {
+
+  static navigationOptions = ({ navigation }) => {
+    return{
+      header:null,
+  }
+};
 
   api=()=>{
     console.log("api")
@@ -58,10 +68,11 @@ export default class Start extends Component {
 
     /*Move to setting screen*/
     firstTime() {
+        appDB.create()
         const resetAction = StackActions.reset({
           index: 1,
           actions: [
-            NavigationActions.navigate({ routeName: 'Bar' }),
+            NavigationActions.navigate({ routeName: 'DashBoard' }),
             NavigationActions.navigate({ routeName: 'Settings' })
           ]
         });
@@ -75,50 +86,54 @@ export default class Start extends Component {
           index: 0,
           actions: [
             //NavigationActions.navigate({ routeName: 'Location' }),
-            NavigationActions.navigate({ routeName: 'Bar' })
+            NavigationActions.navigate({ routeName: 'DashBoard' })
           ]
         });
 
         this.props.navigation.dispatch(resetAction);
     }
-
+     
+    componentDidMount(){
+      setTimeout(()=>{this.startup()},1500)
+    }
     async initialzeSettings(){
       try {
         AsyncStorage.setItem('settings', JSON.stringify({speeding:60,acceleration:20,deacceleration:20,short_break:20,turn:30}));
       } catch (error) {
-        console.log(error)
+       Alert.alert(error,"initialzeSettings")
       }
 
     }
-
-
 
     async startup(){
       try {
         const value =  await  AsyncStorage.getItem('startup');
         console.log("Value",value)
         if (value === null){
-           AsyncStorage.setItem('startup', "started");
-           this.initialzeSettings()
+          AsyncStorage.setItem('startup', "started");
+          this.initialzeSettings()
           this.firstTime()
-
 
         }
         else{
           this.nextTime()
         }
       } catch (error) {
-        console.log(error)
-      }
-
-    }
-
-    render(){
-        return (
-                <View style = {styles.container}>
-                  <Image style={styles.appLogo} source={images.icon} onLoad={()=>setTimeout(()=>{this.startup()},1500)}/>
-                  <Text style = {styles.appNameText}>Driving Events</Text>
-                </View>
-          )
+        Alert.alert(error,"startup")
     }
   }
+
+  render(){
+      return (
+              <View style = {styles.container}>
+                    <StatusBar
+                backgroundColor="#004D46"
+                barStyle="light-content"
+                />
+                <Image style={styles.appLogo} source={images.icon} onLoad={()=>console.log("image loaded")}/>
+                <Text style = {styles.appNameText}>Driving Events</Text>
+              </View>
+        )
+  }
+}
+

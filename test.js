@@ -29,9 +29,9 @@ export default class Bar extends Component {
   };
 
 
-  state = {
-    v:'1',
-    val:'Start Tracking',
+ state = {
+    
+    trackingStatus:'Start Tracking',
     stop:0.0,
     acc:0.0,
     turn:0.0,
@@ -40,58 +40,27 @@ export default class Bar extends Component {
     running:0.0,
     speeding:0.0,
     sharp_turn:0.0,
-    harsh_acc:0.0
+    harsh_acc:0.0,
+    timestampSum:0
 
   }
 
 
-bar_disp=(event,tx)=>{
-    var total = 0
-    var run = 0
-    var total1 = 0
-    var run1 = 0
+  progressbar_display=(event,tx)=>{
+  
     var percentage = 0
+    tx.executeSql("SELECT SUM(curr_timestamp-last_timestamp) FROM Events WHERE event ='"+event+"'" ,[], (tx, results) => {
+      eventTimeSum= results.rows.item(0)['SUM(curr_timestamp-last_timestamp)']
+      if(eventTimeSum){
+        console.log(event,(eventTimeSum/this.state.timestampSum)*100)
+        percentage = (eventTimeSum/this.state.timestampSum)*100
 
-          tx.executeSql('SELECT * FROM Events', [], (tx, results) => {
-            var len = results.rows.length;
-            console.log("Length:",len)
-            if(len>0){
-                 tx.executeSql("SELECT SUM(curr_timestamp-last_timestamp) FROM Events WHERE event !='stop'" ,[], (tx,results) => {
-                   total = results.rows.item(0)
-                   for (var key in total) {
-                      total1 = total[key];
-                    }
-                 });
-                 tx.executeSql("SELECT SUM(curr_timestamp-last_timestamp) FROM Events WHERE event ='"+event+"'" ,[], (tx, results) => {
-                   run = results.rows.item(0)
-                   for (var key in run) {
-                     run1 = run[key];
-                 }
-                 if(run1){
-                   console.log(event,(run1/total1)*100)
-                    percentage = (run1/total1)*100
-                    this.set_bar(event,percentage);
-                  }
+        var obj = {}
+        obj[event] =percentage
+        this.setState(obj);
+      }
 
-                 });
-              }
-         });
-     }
-
-set_bar=(event,percentage)=>
-  {
-     var obj = {}
-     obj[event] =percentage
-     this.setState(obj, function() {
-           console.log(this.state.running)
-   });
-
-   if(event=='sharp turn')
-     {
-       this.setState({sharp_turn:percentage}, function() {
-             console.log("Sharp",this.state.sharp_turn)
-     });
-     }
+    });
   }
 
 create=()=>{
@@ -134,12 +103,10 @@ create=()=>{
       });
   }
 
-
-add(timestamp,lat,long,bearing,speed,accu,k,bearing_diff,b1,b2){
+add = (timestamp, lat, long, bearing, speed, accu, settings, bearing_diff, start_bearing_obj, stop_bearing_obj)=>{
       var speed = speed*3.6 //convert speed from m/s to km/h
-    //console.log(speed,"km/h")
-    //console.log("add Bearing_diff:",bearing_diff)
       var event = "null"
+      console.log(event)
       //console.log("Turn:",k.turn)
 
       var db = SQLite.openDatabase({name: 'my.db', location: 'default'});
@@ -148,84 +115,119 @@ add(timestamp,lat,long,bearing,speed,accu,k,bearing_diff,b1,b2){
       var accu1 = accu.toFixed(2)
       var lat1 = JSON.stringify(lat)
       var long1 = JSON.stringify(long)
-      //var timestamp = parseInt(timestamp)
-      //console.log("timestamp1:",timestamp1)
 
+      //insert all the required attribute in Location database
       tx.executeSql("Insert into Location (timestamp,lat,long,bearing,speed,accuracy) values("+timestamp+",'"+lat1+"','"+long1+"',"+bearing+","+speed+","+accu1+");")
       console.log("Inserted into Location");
-
-      tx.executeSql('SELECT * FROM Events', [], (tx, results) => {
-        var len = results.rows.length;
-        //console.log("lenght:",len)
-        //initial entry in the database
-        if(len<=0){
-          tx.executeSql("Insert into Events "+event_query+" values(0,'stop',"+timestamp+","+timestamp+",'"+lat1+"','"+lat1+"','"+long1+"','"+long1+"',"+bearing+","+bearing+","+speed+","+speed+");")
-          //console.log("Inserted into events")
-        }
-
-        else{
-            //get the last record from the database
-            tx.executeSql('SELECT * from Events ORDER BY id DESC LIMIT 1', [], (tx, results) => {
-              var event_row = results.rows.item(0) //last record from event database
-              console.log("Events:",event_row)
-
-              //for turn
-              if(bearing_diff >= 45){
-
-                console.log("Diff bearing:",bearing_diff)
-                //this is exception where bearing change from less than 360 to more more than zero
-                if(bearing_diff>180){
-                    bearing_diff = Math.abs(360 - bearing_diff)
-                }
-
-                event = "turn"
-                if(bearing_diff>= 45){
-                    if(speed>k.turn){
-                        event = "sharp turn"
-                        this.turn(tx,b1,b2,event,lat1,long1,speed,bearing,timestamp,event_row)
-                    }
-                    else{
-                        event = "turn"
-                        this.turn(tx,b1,b2,event,lat1,long1,speed,bearing,timestamp,event_row)
-                    }
-                 }
-               }
-               else{
-                  event = this.getEvent(speed,k,event_row)
-                  console.log("New Event",event)
-                  this.event(tx,event,lat1,long1,speed,bearing,timestamp,event_row)
-              }
-            });
-          }
+      //get the last record from the database
+      //Appdb.getLastRow(callback,tx)
+      tx.executeSql('SELECT * from Events ORDER BY id DESC LIMIT 1', [], (tx, results) => {
+        var event_row = results.rows.item(0) //last record from event database
+        //Determines driving events                
+        this.logicLoop(tx, event_row, start_bearing_obj, stop_bearing_obj, event, lat1, long1, speed, bearing, timestamp, bearing_diff, settings)
+     
         });
-
     });
   }
+//Determines driving event                
+logicLoop=(tx,event_row,start_bearing_obj,stop_bearing_obj,event,lat1,long1,speed,bearing,timestamp,bearing_diff,settings)=>{
 
-getEvent(speed,k,event_row){
+    //when there are no recordes in Events table
+    if(!event_row){
+        tx.executeSql("Insert into Events "+event_query+" values(0,'stop',"+timestamp+","+timestamp+",'"+lat1+"','"+lat1+"','"+long1+"','"+long1+"',"+bearing+","+bearing+","+speed+","+speed+");")
+        return
+    }
+
+    //for turn
+    //here bearing_diff is abs difference between bearing at start of turn till it ends.
+    //it is not the bearing diff between two consequtive GPS data 
+    if(bearing_diff >= 45){
+
+        event = "turn"
+        //significant difference in bearing
+        if(bearing_diff>= 45){
+            //sharp turn settings
+            if(speed>settings.turn){
+                event = "sharp_turn"
+                this.turn(tx,start_bearing_obj,stop_bearing_obj,event,lat1,long1,speed,bearing,timestamp,event_row)
+            }
+            else{
+                event = "turn"
+                this.turn(tx,start_bearing_obj,stop_bearing_obj,event,lat1,long1,speed,bearing,timestamp,event_row)
+            }
+        }
+    }
+    //for rest of the cases
+    else{ 
+          //return a event. Which includes one of the following
+          // {acc,deacc,short_break,harsh_Acc}
+          event = this.getEvent(speed,settings,event_row)
+          console.log("New Event",event)
+          this.insertEvent(tx,event,lat1,long1,speed,bearing,timestamp,event_row)
+    }
+}
+
+//insert event into database
+insertEvent(tx,event,lat1,long1,speed,bearing,timestamp,event_row){
+  //whene there is significant diffrenece beetween last and current timestamp
+  //if time stamp difference between last event and current event is greater than 60*3s than initiate new event wiht current timestamp
+  
+  if(timestamp - event_row.last_timestamp > 60000*3){
+    this.insert_new(tx,event,timestamp,lat1,long1,speed,bearing)
+    console.log("1evnet")
+   }
+   //Continue adding events with continious timestamp
+  else if(event_row.event!=event || timestamp - event_row.last_timestamp > 15000){
+    this.insert_continue(tx,event,lat1,long1,speed,bearing,timestamp,event_row)
+    console.log("2evnet")
+  }
+  //extend event
+  else{
+   this.update(tx,lat1,long1,speed,bearing,timestamp,event_row)
+   console.log("3evnet")
+  }
+}
+
+
+
+//returns absolute difference between th\wo angles
+//also includes one exception where angle1 is around 340 and angle2 in around 10
+getAbsoluteAngle(angle1,angle2){
+  var angle_diff = Math.abs(angle1 - angle2)
+  //Max angle diff possible is 180 if >180 then it an exception. (200 for safty)
+  if(angle_diff > 200){
+      return 360 - angle_diff
+  }
+  console.log("abs diff:",angle_diff)
+  return angle_diff
+
+}
+//return a event. Which includes one of the following
+// {acc,deacc,short_break,harsh_Acc}
+getEvent(speed,settings,event_row){
   var event = "running"
   if(speed <= 0 ){
     event = "stop"
   }
 
-  else if(speed - event_row.curr_speed > 2*k.acceleration){
-       event = "harsh_acc"
+  else if(speed - event_row.curr_speed > 2*settings.acceleration){
+       event = "harsh_acc"                 
    }
 
 
-  else if(speed - event_row.curr_speed > k.acceleration){
-      event = "acc"
+  else if(speed - event_row.curr_speed > settings.acceleration){
+      event = "acc"      
   }
 
- else if(event_row.curr_speed - speed > k.short_break ){
-      event = "short_break"
+ else if(event_row.curr_speed - speed > settings.short_break ){
+      event = "short_break"  
   }
 
-  else if(event_row.curr_speed - speed > k.deacceleration ){
-       event = "deacc"
+  else if(event_row.curr_speed - speed > settings.deacceleration ){
+       event = "deacc"    
    }
 
-  else if(speed > k.speeding ){
+  else if(speed > settings.speeding ){
        event = "speeding"
    }
   else{
@@ -234,64 +236,50 @@ getEvent(speed,k,event_row){
    console.log("get",event)
   return event
 }
-turn(tx,b1,b2,event,lat1,long1,speed,bearing,timestamp,event_row){
-    //console.log("Event prev turn",event_row.event)
-    //console.log(event)
 
-    if(timestamp - event_row.last_timestamp > 55000){
+turn(tx,start_bearing_obj,stop_bearing_obj,event,lat1,long1,speed,bearing,timestamp,event_row){
+    //significant time difference between last and current timestamp(55sec here)
+    if(timestamp - event_row.last_timestamp > 55*1000){
     this.insert_new(tx,event,lat1,long1,speed,bearing)
     }
 
+    //when last event is equal to current event
     else if(event_row.event!=event){
-        tx.executeSql('SELECT * from Events' + " where last_timestamp >="+b1.timestamp+" and "+
-        "curr_timestamp<=" + b2.timestamp , [], (tx, results) => {
 
+        tx.executeSql('SELECT * from Events' + " where last_timestamp >="+start_bearing_obj.timestamp+" and "+
+        "curr_timestamp<=" + stop_bearing_obj.timestamp , [], (tx, results) => {
+        //if there is no event between the timespan where turn is detected then insert 
+        //new turn event with contiuing timestamp as of last event in the Event table
         if(results.rows.length<=0){
             this.insert_continue(tx,event,lat1,long1,speed,bearing,timestamp,event_row)
             console.log("Inserted turn")
         }
+        //else update all the events recorded in the timespan where turn in recorded to turn event
+        //In case the prediction of turn event is wrong then other events are not missed
         else{
             tx.executeSql("UPDATE Events set "+
             "event='"+event+"'"+
-            " where last_timestamp >="+b1.timestamp+" and "+
-            "curr_timestamp<=" + b2.timestamp);
+            " where last_timestamp >="+start_bearing_obj.timestamp+" and "+
+            "curr_timestamp<=" + stop_bearing_obj.timestamp);
             console.log("Update into turn *****")
         }
-        });
+      });
     }
-
+    //Extend event when last event is equal to current event
     else{
-    this.update(lat1,long1,speed,bearing,timestamp,event_row)
+        this.update(tx,lat1,long1,speed,bearing,timestamp,event_row)
     }
   }
-
-event(tx,event,lat1,long1,speed,bearing,timestamp,event_row){
-    //if time stamp difference between last event and current event is greater than 60*3s than initiate new event wiht current timestamp
-    if(timestamp - event_row.last_timestamp > 60000*3){
-      this.insert_new(tx,event,timestamp,lat1,long1,speed,bearing)
-      //console.log("1evnet")
-     }
-     //Continue adding events with continious timestamp
-    else if(event_row.event!=event || timestamp - event_row.last_timestamp > 15000){
-      this.insert_continue(tx,event,lat1,long1,speed,bearing,timestamp,event_row)
-      //console.log("2evnet")
-    }
-    //extend event
-    else{
-     this.update(lat1,long1,speed,bearing,timestamp,event_row)
-     //console.log("3evnet")
-    }
-}
 
 //insert event in continious timestamp(prev timestamp == next.current_timestamp)
 insert_continue(tx,event,lat1,long1,speed,bearing,timestamp,event_row){
   tx.executeSql("Insert into Events "+event_query+" values(0,'"+event+"',"+event_row.curr_timestamp+","+timestamp+",'"+event_row.curr_lat+"','"+lat1+"','"+event_row.curr_long+"','"+long1+"',"+event_row.curr_bearing+","+bearing+","+event_row.curr_speed+","+speed+");")
-
 }
 //insert event in non continious timestamp(next.current_timestamp == next.previous_timestamp)
 insert_new(tx,event,timestamp,lat1,long1,speed,bearing){
   tx.executeSql("Insert into Events "+event_query+" values(0,'"+event+"',"+timestamp+","+timestamp+",'"+lat1+"','"+lat1+"','"+long1+"','"+long1+"',"+bearing+","+bearing+","+speed+","+speed+");")
 }
+
 //extend the event
 update(tx,lat1,long1,speed,bearing,timestamp,event_row){
   tx.executeSql("UPDATE Events set "+
@@ -306,49 +294,56 @@ update(tx,lat1,long1,speed,bearing,timestamp,event_row){
  //called when component in launched
  async componentWillMount(){
 
-   var db = SQLite.openDatabase({name: 'my.db', location: 'default'});
-   db.transaction((tx) => {
-   this.bar_disp('harsh_acc',tx)
-   this.bar_disp('running',tx)
-   this.bar_disp('stop',tx)
-   this.bar_disp('turn',tx)
-   this.bar_disp('deacc',tx)
-   this.bar_disp('short break',tx)
-   this.bar_disp('speeding',tx)
-   this.bar_disp('sharp turn',tx)
-   this.bar_disp('acc',tx)
-  });
+  var db = SQLite.openDatabase({name: 'my.db', location: 'default'});
 
+  db.transaction((tx) => {
+    tx.executeSql("SELECT SUM(curr_timestamp-last_timestamp) FROM Events WHERE event !='stop'" ,[], (tx,results) => {
+      total = results.rows.item(0)['SUM(curr_timestamp-last_timestamp)']
+      this.setState({timestampSum:total})
+    });
 
-  //this.props.navigation.setParams({ navigate: this.goToSettings });
- }
+  this.progressbar_display('harsh_acc',tx)
+  this.progressbar_display('running',tx)
+  this.progressbar_display('stop',tx)
+  this.progressbar_display('turn',tx)
+  this.progressbar_display('deacc',tx)
+  this.progressbar_display('short break',tx)
+  this.progressbar_display('speeding',tx)
+  this.progressbar_display('sharp_turn',tx)
+  this.progressbar_display('acc',tx)
+ });
+
+}
 
 //button start-stop text logic
-button_m=() =>{
-     var v = this.state.v
-     if(v=='1')
+trackingButton=() =>{
+     var status = this.state.trackingStatus
+     if(status=='Start Tracking')
      {
-       this.setState({val:'Stop Tracking'})
-       this.setState({v:'0'})
+       //tracking status
+       //changeing tracking button text
+       this.setState({trackingStatus:'Stop Tracking'})
+       //this.setState({v:'0'})
        this.start_tracking()
      }
      else
      {
-       this.setState({val:'Start Tracking'})
-       this.setState({v:'1'})
+       //tracking status
+      //changeing tracking button text
+       this.setState({trackingStatus:'Start Tracking'})
+       //this.setState({v:'1'})
        this.stop_tracking()
-      v=1
      }
 
   }
 
 
 start_tracking_ios=()=>{
-  var k = this.state.settings
+    var settings = this.state.settings
     this.create()
-    //var k = this.state.settings
+    
 
-
+    //configure GPS
     BackgroundGeolocation.configure({
       desiredAccuracy: BackgroundGeolocation.HIGH_ACCURACY,
       stationaryRadius: 0,
@@ -366,97 +361,26 @@ start_tracking_ios=()=>{
 
     });
 
-    var flag = 0
-    var flag_inside = 0
-    var b1 = ""
-    var b2 = ""
-    var location_prev = 'none'
+    //obj 
+    var obj = {location_prev:"none", start_bearing_obj:{}, stop_bearing_obj:{}, isTurn:0}
 
     BackgroundGeolocation.on('location', (location) => {
-      if(location_prev === 'none'){
-        location_prev=location
+      if(obj.location_prev === 'none'){
+        obj.location_prev=location
       }
 
-      console.log(location)
+      console.log("location",location)
 
-      var bearing_diff = Math.abs(location.bearing - location_prev.bearing)
-      console.log("prev:",location_prev,location)
-      var timestamp1 = location.time
-      var bearing = location.bearing
-      var lat = JSON.stringify(location.latitude)
-      var long = JSON.stringify(location.longitude)
-
-      console.log("Flag",flag)
-
-      console.log("bearing_diff1:",bearing_diff)
-      console.log("b1",b1)
-
-      if(bearing_diff>7 || flag == 1){
-      console.log("flag:",flag)
-      if(flag==0){
-            b1 = {
-            timestamp:parseInt(location_prev.time),
-            bearing: location_prev.bearing,
-            lat: JSON.stringify(location_prev.latitude),
-            long:JSON.stringify(location_prev.longitude),
-            speed:location_prev.speed
-
-          }
-           b2 = {
-           timestamp:parseInt(location.time),
-           bearing: location.bearing,
-           lat: JSON.stringify(location.latitude),
-           long:JSON.stringify(location.longitude),
-           speed:location.speed
-
-         }
-
-          flag = 1
-      }
-
-      else{
-        if( b2.timestamp - b1.timestamp >= 12000){
-          b2 = {timestamp:timestamp1,bearing:bearing,lat: lat,long:long}
-          bearing_diff = Math.abs(b2.bearing - b1.bearing)
-          flag = 0
-          //console.log("This is flag")
-        }
-
-        else if( b2.timestamp - b1.timestamp >= 7000){
-          b2 = {timestamp:timestamp1,bearing:bearing,lat: lat,long:long}
-          bearing_diff = Math.abs(b2.bearing - b1.bearing)
-
-          if(bearing_diff > t_60 && bearing_diff<180){
-            flag=0
-          }
-          else if( bearing_diff>180 && Math.abs(360-bearing_diff)>t_60){
-            flag = 0
-          }
-        }
-
-        else{
-          b2 = {timestamp:timestamp1,bearing:bearing,lat: lat,long:long}
-
-        }
-      }
-
-       bearing_diff = Math.abs(b2.bearing - b1.bearing)
-      }
-
-      location_prev = location
+      //return abs diff between bearing when the turn started and end
+      var bearing_diff =  this.bearingLogic(location,obj)
+      obj.location_prev = location
+      console.log("B1:",obj.start_bearing_obj)
+      console.log("B2:",obj.stop_bearing_obj)
+      console.log("obj:",obj.isTurn)
 
 
-      this.add(parseInt(location.time),location.latitude,location.longitude,location.bearing,location.speed,location.accuracy,k,bearing_diff,b1,b2)
-
-
-    });
-
-    BackgroundGeolocation.on('start', () => {
-      console.log('[INFO] BackgroundGeolocation service has been started');
-    });
-
-    BackgroundGeolocation.on('stop', () => {
-      console.log('[INFO] BackgroundGeolocation service has been stopped');
+      this.add(parseInt(location.time),  location.latitude,  location.longitude,  location.bearing,
+                location.speed,  location.accuracy,  settings,  bearing_diff,  obj.start_bearing_obj,  obj.stop_bearing_obj)
     });
 
     BackgroundGeolocation.on('authorization', (status) => {
@@ -471,18 +395,75 @@ start_tracking_ios=()=>{
       }
     });
 
-    BackgroundGeolocation.on('background', () => {
-      console.log('[INFO] App is in background');
-    });
-
-    BackgroundGeolocation.on('foreground', () => {
-      console.log('[INFO] App is in foreground');
-    });
-
-
    BackgroundGeolocation.start();
 
  }
+//return abs diff between bearing when the turn started and end
+bearingLogic=(location,obj)=>{
+
+      var bearing_diff = Math.abs(location.bearing - obj.location_prev.bearing)
+      console.log("prev:",obj.location_prev,location)
+      var timestamp1 = location.time
+      var bearing = location.bearing
+      var lat = JSON.stringify(location.latitude)
+      var long = JSON.stringify(location.longitude)
+
+      console.log("Flag",obj.isTurn)
+
+      console.log("bearing_diff1:",bearing_diff)
+      //console.log("b1",b1)
+      //turn started
+      if(bearing_diff>7 || obj.isTurn == 1){
+        console.log("flag:",obj.isTurn)
+        //initallize bearing obj with previous location value and current location value
+        if(obj.isTurn==0){
+          obj.start_bearing_obj = {
+              timestamp:parseInt(obj.location_prev.time),
+              bearing: obj.location_prev.bearing,
+              lat: JSON.stringify(obj.location_prev.latitude),
+              long:JSON.stringify(obj.location_prev.longitude),
+              speed:obj.location_prev.speed
+            }
+          obj.stop_bearing_obj = {
+            timestamp:parseInt(location.time),
+            bearing: location.bearing,
+            lat: JSON.stringify(location.latitude),
+            long:JSON.stringify(location.longitude),
+            speed:location.speed
+          }
+          //now turn started
+          obj.isTurn = 1
+        }
+
+        else{
+        
+          var timestamp_diff = (obj.stop_bearing_obj.timestamp - obj.start_bearing_obj.timestamp)
+          //update end bearing object with current location values
+          obj.stop_bearing_obj = {timestamp:timestamp1,bearing:bearing,lat: lat,long:long}
+          //abs diffrence between start and stop bearing of turn (start fresh)
+          bearing_diff = this.getAbsoluteAngle(obj.stop_bearing_obj.bearing - obj.start_bearing_obj.bearing)
+          console.log(timestamp_diff)
+          //timestamp_diff>12 sec then terminate turn
+          if( timestamp_diff >= 12000){ 
+            console.log(">=12")
+            obj.isTurn = 0
+          }
+
+          //timestamp_diff>7 sec then check for significant bearing difference
+          else if( timestamp_diff >= 7000){
+            //terminate when significant bearing diff is detected
+            if( bearing_diff>50){
+              obj.isTurn = 0
+            }
+          }
+
+        }
+
+        bearing_diff = this.getAbsoluteAngle(obj.start_bearing_obj.bearing, obj.stop_bearing_obj.bearing)
+      }
+
+      return bearing_diff
+  }
 
 async start_tracking(){
 
@@ -491,8 +472,8 @@ async start_tracking(){
     console.log("New Settings:",value)
     this.setState({settings:value})
 
-    var os = Platform.OS
-    if(os==='ios'){
+ 
+    if(Platform.OS ==='ios'){
         this.start_tracking_ios()
     }
     else{
@@ -519,10 +500,10 @@ location_alert=()=>{
 //Navigates to device location settings
 go_to_location=()=>{
   RNSettings.openSetting(RNSettings.ACTION_LOCATION_SOURCE_SETTINGS)
-  this.setState({v:'1',val:'Start tracking'})
+  this.setState({trackingStatus:'Start tracking'})
   this.stop_tracking()
-  //this.start_tracking()
 }
+
 
 
 async start_tracking_android(){
@@ -546,102 +527,41 @@ async start_tracking_android(){
 
 
     //get deriving setting
-    var k = this.state.settings
-
-    console.log("Granted",granted)
+    var settings = this.state.settings
 
     if (granted) {
       this.create()
 
        FusedLocation.setLocationPriority(FusedLocation.Constants.HIGH_ACCURACY);
-       var location_prev =  FusedLocation.getFusedLocation();
-
+       //var location_prev =  FusedLocation.getFusedLocation();
        FusedLocation.setLocationPriority(FusedLocation.Constants.HIGH_ACCURACY);
        FusedLocation.setLocationInterval(2000);
        FusedLocation.setFastestLocationInterval(1000);
        FusedLocation.setSmallestDisplacement(0);
 
        FusedLocation.startLocationUpdates();
-       var flag = 0
-       var b1 = ""
-       var b2 = ""
-
+       //get location form gps
+       var obj = {location_prev:"none",start_bearing_obj:{},stop_bearing_obj:{},flag:0}
        this.subscription = FusedLocation.on('fusedLocation', location => {
-         console.log(location)
+        
+        location.timestamp = parseInt(location.timestamp)
+        location.time =  (location.timestamp)
 
-         var bearing_diff = Math.abs(location.bearing - location_prev.bearing)
-         //console.log("prev:",location_prev,location)
-         var timestamp1 = parseInt(location.timestamp)
-         var bearing = location.bearing
-         var lat = JSON.stringify(location.latitude)
-         var long = JSON.stringify(location.longitude)
 
-         if(bearing_diff>10 || flag == 1){
-            if(flag==0){
-                  b1 = {
-                  timestamp:parseInt(location_prev.timestamp),
-                  bearing: location_prev.bearing,
-                  lat: JSON.stringify(location_prev.latitude),
-                  long:JSON.stringify(location_prev.longitude),
-                  speed:location_prev.speed
-
-                }
-                  b2 = {
-                  timestamp:parseInt(location.timestamp),
-                  bearing: location.bearing,
-                  lat: JSON.stringify(location.latitude),
-                  long:JSON.stringify(location.longitude),
-                  speed:location.speed
-
-                }
-
-                flag = 1
-            }
-
-            else{
-              if( b2.timestamp - b1.timestamp >= 10000){
-                b2 = {timestamp:timestamp1,bearing:bearing,lat: lat,long:long}
-                bearing_diff = Math.abs(b2.bearing - b1.bearing)
-                flag = 0
-                console.log("I am >10000")
-                console.log(">10000:",bearing_diff)
-
-                //console.log("This is flag")
-              }
-
-              else if( b2.timestamp - b1.timestamp >= 5000){
-                console.log("I am >5000")
-                b2 = {timestamp:timestamp1,bearing:bearing,lat: lat,long:long}
-                bearing_diff = Math.abs(b2.bearing - b1.bearing)
-                console.log(">5000:",bearing_diff)
-                if(bearing_diff > t_60 && bearing_diff<180){
-                  console.log(">40")
-                  flag=0
-                }
-                else if( bearing_diff>180 && Math.abs(360-bearing_diff)>t_60){
-                  console.log(">40 180")
-                  flag = 0
-                }
-              }
-
-              else{
-                console.log("I am b2 update")
-                b2 = {timestamp:timestamp1,bearing:bearing,lat: lat,long:long}
-
-              }
-            }
-
-              bearing_diff = Math.abs(b2.bearing - b1.bearing)
-         }
-
-         location_prev = location
-         console.log("B1",b1)
-         console.log("B2",b2)
-         console.log("Current Bearing_diff",bearing_diff)
-
-        if(location.accuracy<=80){
-         this.add(parseInt(location.timestamp),location.latitude,location.longitude,location.bearing,location.speed,location.accuracy,k,bearing_diff,b1,b2)
-       }
+        if(obj.location_prev === 'none'){
+          obj.location_prev=location
+        }
+  
+        console.log("location",location)
+  
+        
+        var bearing_diff =  this.bearingLogic(location,obj)
+        obj.location_prev = location
+        console.log("B1:",obj.start_bearing_obj)
+        console.log("B2:",obj.stop_bearing_obj)
+  
+        this.add(parseInt(location.time),  location.latitude,  location.longitude,  location.bearing,
+        location.speed,  location.accuracy,  settings,  bearing_diff,  obj.start_bearing_obj,  obj.stop_bearing_obj)      
        });
 
        this.errSubscription = FusedLocation.on('fusedLocationError', error => {
@@ -778,24 +698,24 @@ async start_tracking_android(){
                         </View>
               </View>
 
-              <View>
+              <View>    
                  <TouchableOpacity
-                  style = {styles.Button} onPress={this.button_m}>
-                  <Text style = {styles.ButtonText}>{this.state.val}</Text>
+                  style = {styles.Button} onPress={this.trackingButton}>
+                  <Text style = {styles.ButtonText}>{this.state.trackingStatus}</Text>
                   </TouchableOpacity>
-
+         
                   <TouchableOpacity
                     onPress={() => navigate("DrivingEvents")}
                     style = {styles.Button}>
-                  <Text style = {styles.ButtonText}>View Events</Text>
+                  <Text style = {styles.ButtonText}>View Event</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    onPress={() => navigate("Location")}
+                    onPress={() => navigate("DrivignMap")}
                     style={styles.Button}>
                     <Text style = {styles.ButtonText}>Driving Map</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    onPress={() => navigate("Api")}
+                    onPress={() => this.test1Static()}
                     style={styles.Button}>
                     <Text style = {styles.ButtonText}>Upload</Text>
                   </TouchableOpacity>
@@ -808,4 +728,3 @@ async start_tracking_android(){
 
 
 const event_query = '(sync,event,last_timestamp,curr_timestamp,last_lat,curr_lat,last_long,curr_long,last_bearing,curr_bearing,last_speed,curr_speed) '
-const t_60 = 60

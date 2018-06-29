@@ -14,7 +14,7 @@
         headerStyle:{backgroundColor:'#00897B'},
         headerLeft:null,
         headerRight: (
-          <TouchableOpacity style={{marginRight:10}} onPress={() => navigation.navigate("Bar")}>
+          <TouchableOpacity style={{marginRight:10}} onPress={() => navigation.navigate("DashBoard")}>
             <Image style={styles.icon} source={images.save}/>
           </TouchableOpacity>
         ),

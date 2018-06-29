@@ -1,10 +1,13 @@
 import React, { Component } from 'react';
 import { Text, TouchableOpacity, View,Image,FlatList } from 'react-native';
 import DateTimePicker from 'react-native-modal-datetime-picker';
-import SQLite from 'react-native-sqlite-storage'
 import images from './images'
 import {get_am_or_pm} from './main_functions'
 import {styles} from './styles'
+import AppDB from './AppDB';
+
+
+var appDB = new AppDB("my.db","default")
 
 export default class DrivingEvents extends Component {
 
@@ -38,22 +41,19 @@ export default class DrivingEvents extends Component {
 
 
 componentDidMount(){
+
   var current_time = new Date()
   var mid_night_time = new Date()
   mid_night_time.setHours(0,0,0,0)
 
-  var dateString = current_time.toString().split(" ")
-  var dateString1 = current_time.toString().split(" ")
+  var dateString1 = current_time.toString().split(" ") //start time in string
+  var dateString2 = current_time.toString().split(" ") //end time in string
 
-  var displaytime1 = dateString.splice(1,2).join(' ')+'  12:00 AM'
+  var hour = get_am_or_pm(current_time.getHours())[0]
+  var ampm = get_am_or_pm(current_time.getHours())[1]
 
-
-  var ampm = " am"
-  if(current_time.getHours()>12){
-    ampm = " pm"
-  }
-
-  var displaytime2 = dateString1.splice(1,2).join(' ')+"  "+current_time.getHours()+':'+current_time.getMinutes()+ampm
+  var displaytime1 = dateString1.splice(1,2).join(' ')+'  12:00 am'
+  var displaytime2 = dateString2.splice(1,2).join(' ')+"  "+hour+':'+current_time.getMinutes()+ampm
 
   console.log('dataString;',displaytime1)
   console.log('timestamp:',current_time.getTime())
@@ -82,39 +82,34 @@ componentDidMount(){
 
    //timestamp filter
    filter=()=>{
-     //this.create()
-       var l = []
-       var db = SQLite.openDatabase({name: 'my.db', location: 'default'});
-       var time1 = this.state.time1
-       var time2 = this.state.time2
-       console.log(time1)
-       console.log(time2)
+     console.log("filter")
+    //this.create()
+      var time1 = this.state.time1
+      var time2 = this.state.time2
+      console.log(time1)
+      console.log(time2)
+      appDB.selectEvent(time1,time2,this.addEventList);
+     }
+      addEventList=(results)=>{
+      var eventData = []
+      var len = results.rows.length;
+      console.log(len)
 
-       db.transaction((tx) => {
-       tx.executeSql('SELECT * FROM Events WHERE last_timestamp >= '+time1+' and curr_timestamp <= '+time2, [], (tx, results) => {
-         console.log("SELECT completed");
-         var len = results.rows.length;
-         console.log(len)
-         var t = true
-             for (let i = 0; i < len; i++) {
-               console.log("In Loop")
-               var row = results.rows.item(i);
-               var d = new Date(row.curr_timestamp)
-               var e = new Date(row.last_timestamp)
-               var date = d.getDate() + '/' + (d.getMonth()+1) + '/' + d.getFullYear() +" "+ d.getHours() +":"+d.getMinutes()+":"+d.getSeconds()
-               var date1 =  e.getHours() +":"+e.getMinutes()+":"+e.getSeconds()
-               //console.log(row)
-                   var obj = {event:row.event,last_timestamp:date,curr_timestamp:date1,last_speed:row.last_speed.toFixed(2),curr_speed:row.curr_speed.toFixed(2)}
-                 l.unshift(obj)
-             }
-             console.log("l",l)
-             this.setState({ names:l}, function() {
-                   console.log(this.state.names)
-           });
+      for (let i = 0; i < len; i++) {
+        console.log("In Loop")
+        var row = results.rows.item(i);
+        var d = new Date(row.curr_timestamp)
+        var e = new Date(row.last_timestamp)
+        var date = d.getDate() + '/' + (d.getMonth()+1) + '/' + d.getFullYear() +" "+ d.getHours() +":"+d.getMinutes()+":"+d.getSeconds()
+        var date1 =  e.getHours() +":"+e.getMinutes()+":"+e.getSeconds()
+        //console.log(row)
+            var obj = {event:row.event,last_timestamp:date,curr_timestamp:date1,last_speed:row.last_speed.toFixed(2),curr_speed:row.curr_speed.toFixed(2)}
+            eventData.unshift(obj)
+      }
+      console.log("l",eventData)
+      this.setState({ names:eventData})
+    }
 
-       });
-     });
-   }
 
 
 
@@ -210,12 +205,12 @@ componentDidMount(){
       </View>
       <View style={{ flex:2, flexDirection: 'row'}}>
          <Text style={styles.eventInfoText} >{item.last_speed}</Text>
-       <Text style={styles.eventInfoText} >to</Text>
+       <Text style={styles.eventInfoText} >to </Text>
          <Text style={styles.eventInfoText} >{item.curr_speed}</Text>
        <Text style={styles.eventInfoText} >km/h</Text>
       </View>
       </View>
-    </View>
+      </View>
       }
 
       keyExtractor={(item, index) => index.toString()}
